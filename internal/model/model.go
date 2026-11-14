@@ -47,16 +47,16 @@ type Experiment struct {
 
 // Execution is one run of the external test command.
 type Execution struct {
-	ExperimentID string    `json:"experiment_id"`
-	RunIndex     int       `json:"run_index"` // 1-based for humans
-	StartedAt    time.Time `json:"started_at"`
-	EndedAt      time.Time `json:"ended_at"`
-	DurationMS   int64     `json:"duration_ms"`
-	ExitCode     int       `json:"exit_code"`
-	TimedOut     bool      `json:"timed_out"`
-	StdoutPath   string    `json:"stdout_path"`
-	StderrPath   string    `json:"stderr_path"`
-	JUnitPath    string    `json:"junit_path,omitempty"`
+	ExperimentID string     `json:"experiment_id"`
+	RunIndex     int        `json:"run_index"` // 1-based for humans
+	StartedAt    time.Time  `json:"started_at"`
+	EndedAt      time.Time  `json:"ended_at"`
+	DurationMS   int64      `json:"duration_ms"`
+	ExitCode     int        `json:"exit_code"`
+	TimedOut     bool       `json:"timed_out"`
+	StdoutPath   string     `json:"stdout_path"`
+	StderrPath   string     `json:"stderr_path"`
+	JUnitPath    string     `json:"junit_path,omitempty"`
 	Error        string     `json:"error,omitempty"`
 	WorkerID     int        `json:"worker_id,omitempty"`
 	OrderMode    string     `json:"order_mode,omitempty"`

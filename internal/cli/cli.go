@@ -21,7 +21,7 @@ import (
 )
 
 // Version is reported by the "version" command.
-const Version = "0.8.0-phase8"
+const Version = "0.9.0-mvp"
 
 // Exit codes used by the CLI.
 const (

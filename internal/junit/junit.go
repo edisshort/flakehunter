@@ -25,12 +25,12 @@ type testsuite struct {
 }
 
 type testcase struct {
-	Name      string     `xml:"name,attr"`
-	Classname string     `xml:"classname,attr"`
-	Time      float64    `xml:"time,attr"` // seconds
-	Failure   *failure   `xml:"failure"`
-	Error     *failure   `xml:"error"`
-	Skipped   *skipped   `xml:"skipped"`
+	Name      string   `xml:"name,attr"`
+	Classname string   `xml:"classname,attr"`
+	Time      float64  `xml:"time,attr"` // seconds
+	Failure   *failure `xml:"failure"`
+	Error     *failure `xml:"error"`
+	Skipped   *skipped `xml:"skipped"`
 }
 
 type failure struct {

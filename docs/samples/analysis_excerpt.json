@@ -1,0 +1,40 @@
+{
+  "experiment_id": "20261114-080011-0700",
+  "runs_analyzed": 20,
+  "runs_with_tests": 20,
+  "unique_tests": 7,
+  "min_outcomes": 5,
+  "order_mode": "default",
+  "parallel": 1,
+  "counts": {
+    "stable_passing": 4,
+    "consistently_failing": 1,
+    "flaky": 2,
+    "insufficient_evidence": 0,
+    "inconsistent_presence": 0
+  },
+  "highlights": [
+    {
+      "name": "test_coin_flip::test_coin_flip",
+      "classification": "flaky",
+      "passed": 14,
+      "failed": 6,
+      "failure_rate": 0.3
+    },
+    {
+      "name": "test_consistent_fail::test_always_fails",
+      "classification": "consistently_failing",
+      "passed": 0,
+      "failed": 20,
+      "failure_rate": 1.0
+    },
+    {
+      "name": "test_timing::test_timing_window",
+      "classification": "flaky",
+      "passed": 12,
+      "failed": 8,
+      "failure_rate": 0.4
+    }
+  ],
+  "note": "Excerpt from a real local validation run. See docs/VALIDATION.md."
+}
