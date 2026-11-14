@@ -1,0 +1,7 @@
+# Keep Go sources LF so gofmt checks match on Windows and Unix CI.
+*.go text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
