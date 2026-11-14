@@ -3,6 +3,7 @@
 // Phase 2–3: sequential execution + JUnit collection.
 // Phase 4: analysis after runs complete.
 // Phase 5: bounded worker pool for --parallel N.
+// Phase 6: order/seed variation for reproducible experiments.
 package experiment
 
 import (
@@ -33,6 +34,10 @@ type Config struct {
 	Timeout    time.Duration
 	// MinOutcomes overrides analysis threshold (0 = default).
 	MinOutcomes int
+	// OrderMode is model.OrderDefault or model.OrderRandom.
+	OrderMode string
+	// Seed is the base seed for random order (0 = auto-generate when random).
+	Seed int64
 }
 
 // Runner executes experiments using an engine + store.
@@ -66,6 +71,15 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (model.Experiment, error) 
 	if cfg.Parallel > cfg.Runs {
 		cfg.Parallel = cfg.Runs
 	}
+	if cfg.OrderMode == "" {
+		cfg.OrderMode = model.OrderDefault
+	}
+	if cfg.OrderMode == model.OrderRandom && cfg.Seed == 0 {
+		cfg.Seed = time.Now().UnixNano() % 1_000_000_000
+		if cfg.Seed < 0 {
+			cfg.Seed = -cfg.Seed
+		}
+	}
 
 	now := time.Now()
 	exp := model.Experiment{
@@ -76,10 +90,15 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (model.Experiment, error) 
 		RunsRequested: cfg.Runs,
 		Parallel:      cfg.Parallel,
 		TimeoutMS:     cfg.Timeout.Milliseconds(),
+		OrderMode:     cfg.OrderMode,
+		Seed:          cfg.Seed,
 		Status:        model.StatusRunning,
 		GoVersion:     runtime.Version(),
 		GOOS:          runtime.GOOS,
 		GOARCH:        runtime.GOARCH,
+	}
+	if cfg.OrderMode == model.OrderRandom {
+		exp.Note = "Random order uses pytest-randomly (--randomly-seed). Run i uses base_seed+i."
 	}
 
 	if err := r.Store.CreateExperiment(exp); err != nil {
@@ -92,9 +111,17 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (model.Experiment, error) 
 	}
 	fmt.Fprintf(r.Stdout, "Experiment %s\n", exp.ID)
 	fmt.Fprintf(r.Stdout, "  runs:     %d (%s)\n", cfg.Runs, mode)
+	fmt.Fprintf(r.Stdout, "  order:    %s", cfg.OrderMode)
+	if cfg.OrderMode == model.OrderRandom {
+		fmt.Fprintf(r.Stdout, " (base seed %d)", cfg.Seed)
+	}
+	fmt.Fprintln(r.Stdout)
 	fmt.Fprintf(r.Stdout, "  command:  %v\n", cfg.Command)
 	fmt.Fprintf(r.Stdout, "  workdir:  %s\n", absOrDot(cfg.WorkingDir))
 	fmt.Fprintf(r.Stdout, "  data:     %s\n\n", r.Store.ExperimentDir(exp.ID))
+	if cfg.OrderMode == model.OrderRandom && pytestutil.LooksLikePytest(cfg.Command) {
+		fmt.Fprintf(r.Stderr, "note: random order requires pytest-randomly (or compatible --randomly-seed support)\n")
+	}
 
 	usePytest := pytestutil.LooksLikePytest(cfg.Command)
 	runErrors := r.executeAll(ctx, exp, cfg, usePytest)
@@ -190,9 +217,19 @@ func (r *Runner) oneRun(ctx context.Context, exp model.Experiment, cfg Config, r
 		return model.Execution{}, err
 	}
 
+	runSeed := exp.Seed
+	if exp.OrderMode == model.OrderRandom {
+		runSeed = exp.Seed + int64(runIndex)
+	}
+
 	argv := append([]string{}, cfg.Command...)
+	var env []string
 	if usePytest {
 		argv = pytestutil.WithJUnitXML(argv, junitPath)
+		if exp.OrderMode == model.OrderRandom {
+			argv = pytestutil.WithRandomlySeed(argv, runSeed)
+			env = pytestutil.EnvWithPythonHashSeed(runSeed)
+		}
 	}
 
 	stdoutFile, err := engine.OpenLogFile(stdoutPath)
@@ -211,6 +248,7 @@ func (r *Runner) oneRun(ctx context.Context, exp model.Experiment, cfg Config, r
 	eng := engine.Run(ctx, engine.Request{
 		Argv:    argv,
 		Dir:     cfg.WorkingDir,
+		Env:     env,
 		Timeout: cfg.Timeout,
 		Stdout:  stdoutFile,
 		Stderr:  stderrFile,
@@ -228,6 +266,8 @@ func (r *Runner) oneRun(ctx context.Context, exp model.Experiment, cfg Config, r
 		StdoutPath:   stdoutPath,
 		StderrPath:   stderrPath,
 		WorkerID:     workerID,
+		OrderMode:    exp.OrderMode,
+		Seed:         runSeed,
 	}
 	if usePytest {
 		execution.JUnitPath = junitPath
@@ -242,6 +282,9 @@ func (r *Runner) oneRun(ctx context.Context, exp model.Experiment, cfg Config, r
 			execution.CollectError = cerr.Error()
 		} else {
 			execution.Tests = tests
+			for _, tc := range tests {
+				execution.TestOrder = append(execution.TestOrder, tc.Name)
+			}
 		}
 	}
 
@@ -264,7 +307,7 @@ func (r *Runner) analyzeAndPrint(exp model.Experiment, cfg Config) error {
 	if cfg.MinOutcomes > 0 {
 		th.MinOutcomes = cfg.MinOutcomes
 	}
-	rep := analysis.Analyze(exp.ID, execs, th)
+	rep := analysis.AnalyzeExperiment(exp, execs, th)
 	if err := r.Store.WriteAnalysis(exp.ID, rep); err != nil {
 		return err
 	}

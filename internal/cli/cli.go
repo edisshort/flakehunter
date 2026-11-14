@@ -3,22 +3,25 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/edisshort/flakehunter/internal/analysis"
 	"github.com/edisshort/flakehunter/internal/experiment"
+	"github.com/edisshort/flakehunter/internal/model"
 	"github.com/edisshort/flakehunter/internal/report"
 	"github.com/edisshort/flakehunter/internal/store"
 )
 
 // Version is reported by the "version" command.
-const Version = "0.5.0-phase5"
+const Version = "0.6.0-phase6"
 
 // Exit codes used by the CLI.
 const (
@@ -35,6 +38,9 @@ type RunConfig struct {
 	Timeout     time.Duration // 0 = none
 	WorkingDir  string
 	MinOutcomes int // 0 = analysis default
+	OrderMode   string
+	Seed        int64
+	SeedSet     bool
 	Command     []string
 }
 
@@ -60,6 +66,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdList(stdout, stderr)
 	case "report":
 		return cmdReport(args[1:], stdout, stderr)
+	case "compare":
+		return cmdCompare(args[1:], stdout, stderr)
 	case "run":
 		cfg, err := parseRunArgs(args[1:])
 		if err != nil {
@@ -88,6 +96,10 @@ func cmdRun(cfg RunConfig, stdout, stderr io.Writer) int {
 		Stdout: stdout,
 		Stderr: stderr,
 	}
+	seed := cfg.Seed
+	if !cfg.SeedSet {
+		seed = 0 // let experiment auto-generate when random
+	}
 	_, err := runner.Run(ctx, experiment.Config{
 		Command:     cfg.Command,
 		WorkingDir:  cfg.WorkingDir,
@@ -95,6 +107,8 @@ func cmdRun(cfg RunConfig, stdout, stderr io.Writer) int {
 		Parallel:    cfg.Parallel,
 		Timeout:     cfg.Timeout,
 		MinOutcomes: cfg.MinOutcomes,
+		OrderMode:   cfg.OrderMode,
+		Seed:        seed,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
@@ -122,8 +136,12 @@ func cmdList(stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "  %s  (unreadable: %v)\n", id, err)
 			continue
 		}
-		fmt.Fprintf(stdout, "  %s  status=%s runs=%d parallel=%d cmd=%s\n",
-			id, exp.Status, exp.RunsRequested, exp.Parallel, strings.Join(exp.Command, " "))
+		order := exp.OrderMode
+		if order == "" {
+			order = model.OrderDefault
+		}
+		fmt.Fprintf(stdout, "  %s  status=%s runs=%d parallel=%d order=%s seed=%d cmd=%s\n",
+			id, exp.Status, exp.RunsRequested, exp.Parallel, order, exp.Seed, strings.Join(exp.Command, " "))
 	}
 	return ExitOK
 }
@@ -189,13 +207,80 @@ func cmdReport(args []string, stdout, stderr io.Writer) int {
 	if minOutcomes > 0 {
 		th.MinOutcomes = minOutcomes
 	}
-	rep := analysis.Analyze(id, execs, th)
+	rep := analysis.AnalyzeExperiment(exp, execs, th)
 	if err := s.WriteAnalysis(id, rep); err != nil {
 		fmt.Fprintf(stderr, "error: save analysis: %v\n", err)
 		return ExitRuntime
 	}
 	report.WriteTerminal(stdout, rep)
-	fmt.Fprintf(stdout, "Saved analysis: %s\n", s.ExperimentDir(id)+string(os.PathSeparator)+"analysis.json")
+	fmt.Fprintf(stdout, "Saved analysis: %s\n", filepath.Join(s.ExperimentDir(id), "analysis.json"))
+	return ExitOK
+}
+
+func cmdCompare(args []string, stdout, stderr io.Writer) int {
+	if len(args) < 2 {
+		fmt.Fprintf(stderr, "error: usage: flakehunter compare <left-id> <right-id>\n")
+		return ExitUsage
+	}
+	leftID, rightID := args[0], args[1]
+	minOutcomes := 0
+	for i := 2; i < len(args); i++ {
+		if args[i] == "--min-outcomes" {
+			if i+1 >= len(args) {
+				fmt.Fprintf(stderr, "error: --min-outcomes requires a value\n")
+				return ExitUsage
+			}
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil || n < 1 {
+				fmt.Fprintf(stderr, "error: --min-outcomes must be >= 1\n")
+				return ExitUsage
+			}
+			minOutcomes = n
+			i++
+			continue
+		}
+		fmt.Fprintf(stderr, "error: unexpected argument %q\n", args[i])
+		return ExitUsage
+	}
+
+	s := store.New(".")
+	leftExp, err := s.ReadExperiment(leftID)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: left experiment: %v\n", err)
+		return ExitRuntime
+	}
+	rightExp, err := s.ReadExperiment(rightID)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: right experiment: %v\n", err)
+		return ExitRuntime
+	}
+	leftExecs, err := s.LoadExecutions(leftID, leftExp.RunsRequested)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: left executions: %v\n", err)
+		return ExitRuntime
+	}
+	rightExecs, err := s.LoadExecutions(rightID, rightExp.RunsRequested)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: right executions: %v\n", err)
+		return ExitRuntime
+	}
+	th := analysis.DefaultThresholds()
+	if minOutcomes > 0 {
+		th.MinOutcomes = minOutcomes
+	}
+	rep := analysis.Compare(leftExp, rightExp, leftExecs, rightExecs, th)
+	report.WriteCompare(stdout, rep)
+
+	outPath := filepath.Join(s.BaseDir(), "compare-"+leftID+"-vs-"+rightID+".json")
+	data, err := json.MarshalIndent(rep, "", "  ")
+	if err != nil {
+		fmt.Fprintf(stderr, "warning: could not encode compare json: %v\n", err)
+		return ExitOK
+	}
+	if err := os.MkdirAll(s.BaseDir(), 0o755); err == nil {
+		_ = os.WriteFile(outPath, append(data, '\n'), 0o644)
+		fmt.Fprintf(stdout, "Saved compare: %s\n", outPath)
+	}
 	return ExitOK
 }
 
@@ -208,6 +293,7 @@ Usage:
 Commands:
   run       Run a repeated test experiment (sequential or parallel)
   report    Analyze an experiment and print a flakiness report
+  compare   Compare two experiments (e.g. sequential vs parallel)
   list      List saved experiments under .flakehunter/
   version   Print the FlakeHunter version
   help      Show this help message
@@ -215,14 +301,16 @@ Commands:
 Examples:
   flakehunter run --runs 30 -- python -m pytest
   flakehunter run --runs 30 --parallel 4 -- python -m pytest
+  flakehunter run --runs 20 --order random --seed 42 -- python -m pytest
+  flakehunter compare <seq-id> <par-id>
   flakehunter report
-  flakehunter report --experiment 20261114-074011-8400
   flakehunter list
 
 Notes:
   - pytest commands get a unique --junitxml per run.
-  - Parallel runs use a bounded worker pool (Phase 5).
-  - Classifications are evidence-based, not root-cause claims.
+  - --order random needs pytest-randomly (--randomly-seed).
+  - JUnit order is best-effort evidence, not guaranteed execution order.
+  - Classifications and comparisons are evidence, not root-cause claims.
 
 `)
 }
@@ -237,6 +325,8 @@ Flags:
   --timeout <dur>      Per-run timeout (e.g. 30s, 2m). Default: none
   --workdir <path>     Working directory for the command (default: current)
   --min-outcomes <n>   Min decisive results before classifying (default 5)
+  --order <mode>       default | random (random uses pytest-randomly)
+  --seed <n>           Base seed for random order (run i uses seed+i)
 
 The "--" separator marks the start of the external test command.
 
@@ -245,8 +335,9 @@ The "--" separator marks the start of the external test command.
 
 func parseRunArgs(args []string) (RunConfig, error) {
 	cfg := RunConfig{
-		Runs:     0,
-		Parallel: 1,
+		Runs:      0,
+		Parallel:  1,
+		OrderMode: model.OrderDefault,
 	}
 
 	i := 0
@@ -299,6 +390,27 @@ func parseRunArgs(args []string) (RunConfig, error) {
 			}
 			cfg.MinOutcomes = n
 			i += 2
+		case "--order":
+			if i+1 >= len(args) {
+				return cfg, fmt.Errorf("--order requires default or random")
+			}
+			mode := strings.ToLower(args[i+1])
+			if mode != model.OrderDefault && mode != model.OrderRandom {
+				return cfg, fmt.Errorf("--order must be %q or %q", model.OrderDefault, model.OrderRandom)
+			}
+			cfg.OrderMode = mode
+			i += 2
+		case "--seed":
+			if i+1 >= len(args) {
+				return cfg, fmt.Errorf("--seed requires an integer")
+			}
+			n, err := strconv.ParseInt(args[i+1], 10, 64)
+			if err != nil {
+				return cfg, fmt.Errorf("--seed must be an integer: %w", err)
+			}
+			cfg.Seed = n
+			cfg.SeedSet = true
+			i += 2
 		default:
 			return cfg, fmt.Errorf("unknown flag or argument %q (use -- before the test command)", arg)
 		}
@@ -334,6 +446,12 @@ func ValidateRunConfig(cfg RunConfig) error {
 	}
 	if cfg.MinOutcomes < 0 {
 		return fmt.Errorf("--min-outcomes must be >= 0")
+	}
+	if cfg.OrderMode != "" && cfg.OrderMode != model.OrderDefault && cfg.OrderMode != model.OrderRandom {
+		return fmt.Errorf("--order must be default or random")
+	}
+	if cfg.SeedSet && cfg.OrderMode != model.OrderRandom {
+		return fmt.Errorf("--seed is only valid with --order random")
 	}
 	if len(cfg.Command) == 0 {
 		return fmt.Errorf("missing test command after -- (example: -- python -m pytest)")

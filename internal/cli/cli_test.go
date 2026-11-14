@@ -49,6 +49,8 @@ func TestParseRunArgs(t *testing.T) {
 		"--parallel", "2",
 		"--timeout", "30s",
 		"--workdir", "C:\\tmp",
+		"--order", "random",
+		"--seed", "42",
 		"--", "python", "-m", "pytest",
 	})
 	if err != nil {
@@ -63,8 +65,21 @@ func TestParseRunArgs(t *testing.T) {
 	if cfg.WorkingDir != `C:\tmp` {
 		t.Fatalf("workdir=%q", cfg.WorkingDir)
 	}
+	if cfg.OrderMode != "random" || cfg.Seed != 42 || !cfg.SeedSet {
+		t.Fatalf("order/seed=%s/%d set=%v", cfg.OrderMode, cfg.Seed, cfg.SeedSet)
+	}
 	if len(cfg.Command) != 3 || cfg.Command[0] != "python" {
 		t.Fatalf("unexpected command: %#v", cfg.Command)
+	}
+}
+
+func TestValidateSeedRequiresRandom(t *testing.T) {
+	cfg := RunConfig{
+		Runs: 2, Parallel: 1, SeedSet: true, Seed: 1,
+		OrderMode: "default", Command: []string{"pytest"},
+	}
+	if err := ValidateRunConfig(cfg); err == nil {
+		t.Fatal("expected seed/order validation error")
 	}
 }
 
