@@ -49,9 +49,10 @@ type Execution struct {
 	StdoutPath   string    `json:"stdout_path"`
 	StderrPath   string    `json:"stderr_path"`
 	JUnitPath    string    `json:"junit_path,omitempty"`
-	Error        string    `json:"error,omitempty"`
+	Error        string     `json:"error,omitempty"`
+	WorkerID     int        `json:"worker_id,omitempty"`
 	Tests        []TestCase `json:"tests,omitempty"`
-	CollectError string    `json:"collect_error,omitempty"`
+	CollectError string     `json:"collect_error,omitempty"`
 }
 
 // TestCase is one test outcome inside one execution.

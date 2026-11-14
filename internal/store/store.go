@@ -86,6 +86,40 @@ func (s *Store) WriteExecution(experimentID string, runIndex int, exec model.Exe
 	return writeJSON(path, exec)
 }
 
+func (s *Store) ReadExecution(experimentID string, runIndex int) (model.Execution, error) {
+	var exec model.Execution
+	path := filepath.Join(s.ExecutionDir(experimentID, runIndex), "result.json")
+	err := readJSON(path, &exec)
+	return exec, err
+}
+
+// LoadExecutions reads result.json for run indexes 1..runsRequested.
+// Missing files are skipped (partial experiments).
+func (s *Store) LoadExecutions(experimentID string, runsRequested int) ([]model.Execution, error) {
+	var out []model.Execution
+	for i := 1; i <= runsRequested; i++ {
+		exec, err := s.ReadExecution(experimentID, i)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return out, err
+		}
+		out = append(out, exec)
+	}
+	return out, nil
+}
+
+func (s *Store) WriteAnalysis(experimentID string, report model.AnalysisReport) error {
+	return writeJSON(filepath.Join(s.ExperimentDir(experimentID), "analysis.json"), report)
+}
+
+func (s *Store) ReadAnalysis(experimentID string) (model.AnalysisReport, error) {
+	var rep model.AnalysisReport
+	err := readJSON(filepath.Join(s.ExperimentDir(experimentID), "analysis.json"), &rep)
+	return rep, err
+}
+
 func (s *Store) ListExperimentIDs() ([]string, error) {
 	dir := filepath.Join(s.BaseDir(), ExperimentsDir)
 	entries, err := os.ReadDir(dir)
@@ -102,6 +136,24 @@ func (s *Store) ListExperimentIDs() ([]string, error) {
 		}
 	}
 	return ids, nil
+}
+
+// LatestExperimentID returns the newest id by name (IDs are time-prefixed).
+func (s *Store) LatestExperimentID() (string, error) {
+	ids, err := s.ListExperimentIDs()
+	if err != nil {
+		return "", err
+	}
+	if len(ids) == 0 {
+		return "", fmt.Errorf("no experiments found")
+	}
+	latest := ids[0]
+	for _, id := range ids[1:] {
+		if id > latest {
+			latest = id
+		}
+	}
+	return latest, nil
 }
 
 func writeJSON(path string, v any) error {
