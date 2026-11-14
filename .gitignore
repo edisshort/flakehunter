@@ -1,0 +1,19 @@
+# Binaries
+/flakehunter
+/flakehunter.exe
+*.exe
+*.test
+*.out
+
+# Experiment data (Phase 2+)
+.flakehunter/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
