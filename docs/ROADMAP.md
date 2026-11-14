@@ -14,7 +14,9 @@
 
 ## Next
 
-- [ ] Additional runners (Go `go test` JSON, Jest JUnit)
+- [x] Vitest / `npm test` JUnit collection
+- [x] Lightweight install docs + release binaries workflow
+- [ ] Additional runners (Go `go test` JSON, Jest)
 - [ ] Quarantine list export (CI YAML snippets)
 - [ ] Optional SQLite backend for large histories
 - [ ] Richer duration anomaly stats

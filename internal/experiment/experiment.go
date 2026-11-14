@@ -23,6 +23,7 @@ import (
 	"github.com/edisshort/flakehunter/internal/pytestutil"
 	"github.com/edisshort/flakehunter/internal/report"
 	"github.com/edisshort/flakehunter/internal/store"
+	"github.com/edisshort/flakehunter/internal/testrunner"
 )
 
 // Config is the user-facing plan for one experiment.
@@ -97,8 +98,14 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (model.Experiment, error) 
 		GOOS:          runtime.GOOS,
 		GOARCH:        runtime.GOARCH,
 	}
+	kind := testrunner.Detect(cfg.Command)
 	if cfg.OrderMode == model.OrderRandom {
-		exp.Note = "Random order uses pytest-randomly (--randomly-seed). Run i uses base_seed+i."
+		if testrunner.SupportsRandomOrder(kind) {
+			exp.Note = "Random order uses pytest-randomly (--randomly-seed). Run i uses base_seed+i."
+		} else {
+			exp.Note = "Random order requested, but this runner has no seed integration yet; runs use default order."
+			fmt.Fprintf(r.Stderr, "warning: --order random is only wired for pytest today; continuing without seed injection\n")
+		}
 	}
 
 	if err := r.Store.CreateExperiment(exp); err != nil {
@@ -116,15 +123,15 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (model.Experiment, error) 
 		fmt.Fprintf(r.Stdout, " (base seed %d)", cfg.Seed)
 	}
 	fmt.Fprintln(r.Stdout)
+	fmt.Fprintf(r.Stdout, "  runner:   %s\n", kindName(kind))
 	fmt.Fprintf(r.Stdout, "  command:  %v\n", cfg.Command)
 	fmt.Fprintf(r.Stdout, "  workdir:  %s\n", absOrDot(cfg.WorkingDir))
 	fmt.Fprintf(r.Stdout, "  data:     %s\n\n", r.Store.ExperimentDir(exp.ID))
-	if cfg.OrderMode == model.OrderRandom && pytestutil.LooksLikePytest(cfg.Command) {
+	if cfg.OrderMode == model.OrderRandom && testrunner.SupportsRandomOrder(kind) {
 		fmt.Fprintf(r.Stderr, "note: random order requires pytest-randomly (or compatible --randomly-seed support)\n")
 	}
 
-	usePytest := pytestutil.LooksLikePytest(cfg.Command)
-	runErrors := r.executeAll(ctx, exp, cfg, usePytest)
+	runErrors := r.executeAll(ctx, exp, cfg, kind)
 
 	if ctx.Err() != nil {
 		exp.Status = model.StatusCancelled
@@ -146,7 +153,7 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (model.Experiment, error) 
 	return exp, ctx.Err()
 }
 
-func (r *Runner) executeAll(ctx context.Context, exp model.Experiment, cfg Config, usePytest bool) int {
+func (r *Runner) executeAll(ctx context.Context, exp model.Experiment, cfg Config, kind testrunner.Kind) int {
 	jobs := make(chan int)
 	outcomes := make(chan runOutcome, cfg.Runs)
 
@@ -166,7 +173,7 @@ func (r *Runner) executeAll(ctx context.Context, exp model.Experiment, cfg Confi
 				fmt.Fprintf(r.Stdout, "[%d/%d] starting (worker %d)...\n", runIndex, cfg.Runs, workerID)
 				logMu.Unlock()
 
-				execResult, err := r.oneRun(ctx, exp, cfg, runIndex, workerID, usePytest)
+				execResult, err := r.oneRun(ctx, exp, cfg, runIndex, workerID, kind)
 
 				logMu.Lock()
 				if err != nil {
@@ -211,25 +218,26 @@ dispatch:
 	return runErrors
 }
 
-func (r *Runner) oneRun(ctx context.Context, exp model.Experiment, cfg Config, runIndex, workerID int, usePytest bool) (model.Execution, error) {
+func (r *Runner) oneRun(ctx context.Context, exp model.Experiment, cfg Config, runIndex, workerID int, kind testrunner.Kind) (model.Execution, error) {
 	_, stdoutPath, stderrPath, junitPath, _, err := r.Store.PrepareExecutionDir(exp.ID, runIndex)
 	if err != nil {
 		return model.Execution{}, err
 	}
 
 	runSeed := exp.Seed
-	if exp.OrderMode == model.OrderRandom {
+	if exp.OrderMode == model.OrderRandom && testrunner.SupportsRandomOrder(kind) {
 		runSeed = exp.Seed + int64(runIndex)
 	}
 
 	argv := append([]string{}, cfg.Command...)
 	var env []string
-	if usePytest {
-		argv = pytestutil.WithJUnitXML(argv, junitPath)
-		if exp.OrderMode == model.OrderRandom {
-			argv = pytestutil.WithRandomlySeed(argv, runSeed)
-			env = pytestutil.EnvWithPythonHashSeed(runSeed)
-		}
+	collectJUnit := kind != testrunner.KindNone
+	if collectJUnit {
+		argv = testrunner.WithJUnitXML(kind, argv, junitPath)
+	}
+	if kind == testrunner.KindPytest && exp.OrderMode == model.OrderRandom && testrunner.SupportsRandomOrder(kind) {
+		argv = pytestutil.WithRandomlySeed(argv, runSeed)
+		env = pytestutil.EnvWithPythonHashSeed(runSeed)
 	}
 
 	stdoutFile, err := engine.OpenLogFile(stdoutPath)
@@ -269,14 +277,14 @@ func (r *Runner) oneRun(ctx context.Context, exp model.Experiment, cfg Config, r
 		OrderMode:    exp.OrderMode,
 		Seed:         runSeed,
 	}
-	if usePytest {
+	if collectJUnit {
 		execution.JUnitPath = junitPath
 	}
 	if eng.StartError != nil {
 		execution.Error = eng.StartError.Error()
 	}
 
-	if usePytest {
+	if collectJUnit {
 		tests, cerr := junit.ParseFile(junitPath)
 		if cerr != nil {
 			execution.CollectError = cerr.Error()
@@ -331,4 +339,15 @@ func absOrDot(dir string) string {
 		return abs
 	}
 	return dir
+}
+
+func kindName(k testrunner.Kind) string {
+	switch k {
+	case testrunner.KindPytest:
+		return "pytest (junitxml)"
+	case testrunner.KindVitest:
+		return "vitest/npm-test (junit)"
+	default:
+		return "generic (exit-code only)"
+	}
 }

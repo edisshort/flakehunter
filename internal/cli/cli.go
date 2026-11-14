@@ -21,7 +21,7 @@ import (
 )
 
 // Version is reported by the "version" command.
-const Version = "0.9.0-mvp"
+const Version = "0.9.1-vitest"
 
 // Exit codes used by the CLI.
 const (
@@ -417,10 +417,12 @@ Examples:
   flakehunter list
 
 Notes:
-  - pytest commands get a unique --junitxml per run.
+  - pytest: unique --junitxml per run.
+  - vitest / npm test: unique JUnit --reporter/--outputFile per run.
   - --order random needs pytest-randomly (--randomly-seed).
   - JUnit order is best-effort evidence, not guaranteed execution order.
   - Classifications and comparisons are evidence, not root-cause claims.
+  - Install on another machine: see INSTALL.md (go install or release binary).
   - Example flaky suite: testdata/flaky_suite (Phase 8).
 
 `)

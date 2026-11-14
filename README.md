@@ -23,7 +23,23 @@ CI that is “red then green on retry” wastes hours. Exit codes alone do not e
 - JSON artifacts under `.flakehunter/` (no database)
 - **No LLM APIs**
 
-## Install
+## Install (lightweight — other machines)
+
+**Yes, you can install a small binary and run it anywhere** (you do not need the full source tree on every device).
+
+```bash
+# If Go is installed:
+go install github.com/edisshort/flakehunter/cmd/flakehunter@latest
+flakehunter version
+```
+
+Or download an OS binary from [Releases](https://github.com/edisshort/flakehunter/releases) (Windows `.exe`, Linux, macOS).
+
+Full options: **[INSTALL.md](INSTALL.md)**.
+
+The target machine still needs the project’s own test tools (Node for `npm test`, Python for pytest, etc.).
+
+### Build from source
 
 Requirements: **Go 1.22+** (developed with Go 1.27).
 
@@ -34,19 +50,9 @@ go test ./...
 go build -o flakehunter ./cmd/flakehunter
 ```
 
-Windows:
+Windows: `.\scripts\check.ps1`
 
-```powershell
-git clone https://github.com/edisshort/flakehunter.git
-cd flakehunter
-.\scripts\check.ps1
-```
-
-Optional demo suite:
-
-```bash
-pip install -r testdata/flaky_suite/requirements.txt
-```
+Optional pytest demo suite: `pip install -r testdata/flaky_suite/requirements.txt`
 
 ## Quick start
 
@@ -54,20 +60,24 @@ pip install -r testdata/flaky_suite/requirements.txt
 # Help
 ./flakehunter help
 
-# Run the intentional flaky demo (pytest required)
+# Pytest demo suite
 ./flakehunter run --runs 20 --min-outcomes 5 --workdir testdata/flaky_suite -- python -m pytest -q
 
-# Report / inspect / list
-./flakehunter report --workdir testdata/flaky_suite
-./flakehunter inspect test_coin_flip --workdir testdata/flaky_suite
-./flakehunter list --workdir testdata/flaky_suite
+# Vitest / npm test project (e.g. QSB)
+./flakehunter run --runs 10 --workdir /path/to/qsb-nse -- npm test
 
-# Compare sequential vs parallel experiments
-./flakehunter run --runs 12 --parallel 4 --workdir testdata/flaky_suite -- python -m pytest -q
-./flakehunter compare <seq-id> <par-id> --workdir testdata/flaky_suite
+# Report / inspect / list
+./flakehunter report --workdir /path/to/qsb-nse
+./flakehunter inspect isLoginRequired --workdir /path/to/qsb-nse
+
+# Compare sequential vs parallel
+./flakehunter run --runs 12 --parallel 4 --workdir /path/to/qsb-nse -- npm test
+./flakehunter compare <seq-id> <par-id> --workdir /path/to/qsb-nse
 ```
 
 PowerShell: use `.\flakehunter.exe` instead of `./flakehunter`.
+
+Supported per-test collection today: **pytest** and **vitest / `npm test`**. Other commands still get exit-code-level runs.
 
 ## Commands
 
@@ -144,7 +154,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 - `--order random` requires a compatible pytest plugin
 - Parallel failure deltas are association evidence, not automatic concurrency proofs
 - Local CLI only — not a secure multi-tenant execution service
-- MVP runner focus is pytest; other runners need adapters
+- Per-test collection: pytest + vitest/npm-test; other runners are exit-code-level until adapters are added
 
 ## Security
 
