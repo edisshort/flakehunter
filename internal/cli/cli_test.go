@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateRunConfigOK(t *testing.T) {
@@ -43,12 +44,24 @@ func TestValidateRunConfigRejectsParallelGreaterThanRuns(t *testing.T) {
 }
 
 func TestParseRunArgs(t *testing.T) {
-	cfg, err := parseRunArgs([]string{"--runs", "10", "--parallel", "2", "--", "python", "-m", "pytest"})
+	cfg, err := parseRunArgs([]string{
+		"--runs", "10",
+		"--parallel", "2",
+		"--timeout", "30s",
+		"--workdir", "C:\\tmp",
+		"--", "python", "-m", "pytest",
+	})
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
 	if cfg.Runs != 10 || cfg.Parallel != 2 {
 		t.Fatalf("got runs=%d parallel=%d", cfg.Runs, cfg.Parallel)
+	}
+	if cfg.Timeout != 30*time.Second {
+		t.Fatalf("timeout=%s", cfg.Timeout)
+	}
+	if cfg.WorkingDir != `C:\tmp` {
+		t.Fatalf("workdir=%q", cfg.WorkingDir)
 	}
 	if len(cfg.Command) != 3 || cfg.Command[0] != "python" {
 		t.Fatalf("unexpected command: %#v", cfg.Command)
@@ -77,21 +90,18 @@ func TestRunVersion(t *testing.T) {
 	}
 }
 
-func TestRunStubPrintsPlan(t *testing.T) {
-	var out, errBuf bytes.Buffer
-	code := run([]string{"run", "--runs", "5", "--", "python", "-m", "pytest"}, &out, &errBuf)
-	if code != ExitOK {
-		t.Fatalf("exit %d stderr=%s", code, errBuf.String())
-	}
-	if !strings.Contains(out.String(), "runs:     5") {
-		t.Fatalf("unexpected output: %q", out.String())
-	}
-}
-
 func TestRunUnknownCommand(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	code := run([]string{"explode"}, &out, &errBuf)
 	if code != ExitUsage {
 		t.Fatalf("expected usage exit, got %d", code)
+	}
+}
+
+func TestRunValidationError(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	code := run([]string{"run", "--runs", "0", "--", "pytest"}, &out, &errBuf)
+	if code != ExitValidation {
+		t.Fatalf("expected validation exit, got %d stderr=%s", code, errBuf.String())
 	}
 }
