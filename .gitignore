@@ -8,6 +8,15 @@
 # Experiment data (Phase 2+)
 .flakehunter/
 
+# Intentional flaky suite scratch files
+testdata/flaky_suite/_shared_counter.txt
+testdata/flaky_suite/_order_flag.txt
+testdata/flaky_suite/.pytest_cache/
+testdata/flaky_suite/.flakehunter/
+__pycache__/
+*.pyc
+.pytest_cache/
+
 # Editor / OS
 .idea/
 .vscode/

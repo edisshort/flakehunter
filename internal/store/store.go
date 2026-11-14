@@ -69,9 +69,15 @@ func (s *Store) ReadExperiment(id string) (model.Experiment, error) {
 
 // PrepareExecutionDir creates the per-run folder and returns absolute paths
 // for stdout, stderr, junit, and result.json.
+// Absolute paths matter: when the test command uses a different working
+// directory, relative --junitxml paths would resolve in the wrong place.
 func (s *Store) PrepareExecutionDir(experimentID string, runIndex int) (execDir, stdout, stderr, junit, result string, err error) {
 	execDir = s.ExecutionDir(experimentID, runIndex)
 	if err = os.MkdirAll(execDir, 0o755); err != nil {
+		return
+	}
+	execDir, err = filepath.Abs(execDir)
+	if err != nil {
 		return
 	}
 	stdout = filepath.Join(execDir, "stdout.log")
@@ -118,6 +124,24 @@ func (s *Store) ReadAnalysis(experimentID string) (model.AnalysisReport, error) 
 	var rep model.AnalysisReport
 	err := readJSON(filepath.Join(s.ExperimentDir(experimentID), "analysis.json"), &rep)
 	return rep, err
+}
+
+func (s *Store) WriteFullReport(experimentID string, rep model.FullReport) error {
+	return writeJSON(filepath.Join(s.ExperimentDir(experimentID), "report.json"), rep)
+}
+
+func (s *Store) ReadFullReport(experimentID string) (model.FullReport, error) {
+	var rep model.FullReport
+	err := readJSON(filepath.Join(s.ExperimentDir(experimentID), "report.json"), &rep)
+	return rep, err
+}
+
+func (s *Store) WriteInspection(experimentID, safeName string, insp model.TestInspection) error {
+	dir := filepath.Join(s.ExperimentDir(experimentID), "inspections")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return writeJSON(filepath.Join(dir, safeName+".json"), insp)
 }
 
 func (s *Store) ListExperimentIDs() ([]string, error) {

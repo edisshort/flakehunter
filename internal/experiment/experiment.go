@@ -311,9 +311,14 @@ func (r *Runner) analyzeAndPrint(exp model.Experiment, cfg Config) error {
 	if err := r.Store.WriteAnalysis(exp.ID, rep); err != nil {
 		return err
 	}
+	full := report.BuildFullReport(exp, rep, execs)
+	if err := r.Store.WriteFullReport(exp.ID, full); err != nil {
+		return err
+	}
 	fmt.Fprintln(r.Stdout)
-	report.WriteTerminal(r.Stdout, rep)
+	report.WriteFullTerminal(r.Stdout, full)
 	fmt.Fprintf(r.Stdout, "Saved analysis: %s\n", filepath.Join(r.Store.ExperimentDir(exp.ID), "analysis.json"))
+	fmt.Fprintf(r.Stdout, "Saved report:   %s\n", filepath.Join(r.Store.ExperimentDir(exp.ID), "report.json"))
 	return nil
 }
 

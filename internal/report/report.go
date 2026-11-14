@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/edisshort/flakehunter/internal/model"
 )
@@ -53,6 +54,14 @@ func WriteTerminal(w io.Writer, rep model.AnalysisReport) {
 	printSection(w, "Flaky tests", rep, model.ClassFlaky)
 	printSection(w, "Consistently failing tests", rep, model.ClassConsistentlyFailing)
 	printSection(w, "Inconsistent presence", rep, model.ClassInconsistentPresence)
+}
+
+// WriteFullTerminal prints analysis plus execution history.
+func WriteFullTerminal(w io.Writer, full model.FullReport) {
+	WriteTerminal(w, full.Analysis)
+	WriteExecutionHistory(w, full)
+	fmt.Fprintf(w, "Experiment command: %v\n", full.Experiment.Command)
+	fmt.Fprintf(w, "Generated at (UTC):  %s\n", full.GeneratedAt.Format(time.RFC3339))
 }
 
 // WriteCompare prints a configuration comparison report.

@@ -21,7 +21,7 @@ import (
 )
 
 // Version is reported by the "version" command.
-const Version = "0.6.0-phase6"
+const Version = "0.8.0-phase8"
 
 // Exit codes used by the CLI.
 const (
@@ -63,9 +63,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "flakehunter %s\n", Version)
 		return ExitOK
 	case "list":
-		return cmdList(stdout, stderr)
+		return cmdList(args[1:], stdout, stderr)
 	case "report":
 		return cmdReport(args[1:], stdout, stderr)
+	case "inspect":
+		return cmdInspect(args[1:], stdout, stderr)
 	case "compare":
 		return cmdCompare(args[1:], stdout, stderr)
 	case "run":
@@ -117,8 +119,13 @@ func cmdRun(cfg RunConfig, stdout, stderr io.Writer) int {
 	return ExitOK
 }
 
-func cmdList(stdout, stderr io.Writer) int {
-	s := store.New(".")
+func cmdList(args []string, stdout, stderr io.Writer) int {
+	root, _, err := parseWorkdirOnly(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return ExitUsage
+	}
+	s := store.New(root)
 	ids, err := s.ListExperimentIDs()
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
@@ -147,7 +154,13 @@ func cmdList(stdout, stderr io.Writer) int {
 }
 
 func cmdReport(args []string, stdout, stderr io.Writer) int {
-	s := store.New(".")
+	root, rest, err := parseWorkdirOnly(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return ExitUsage
+	}
+	args = rest
+	s := store.New(root)
 	id := ""
 	minOutcomes := 0
 	for i := 0; i < len(args); i++ {
@@ -184,7 +197,6 @@ func cmdReport(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	var err error
 	if id == "" {
 		id, err = s.LatestExperimentID()
 		if err != nil {
@@ -212,14 +224,110 @@ func cmdReport(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "error: save analysis: %v\n", err)
 		return ExitRuntime
 	}
-	report.WriteTerminal(stdout, rep)
+	full := report.BuildFullReport(exp, rep, execs)
+	if err := s.WriteFullReport(id, full); err != nil {
+		fmt.Fprintf(stderr, "error: save report: %v\n", err)
+		return ExitRuntime
+	}
+	report.WriteFullTerminal(stdout, full)
 	fmt.Fprintf(stdout, "Saved analysis: %s\n", filepath.Join(s.ExperimentDir(id), "analysis.json"))
+	fmt.Fprintf(stdout, "Saved report:   %s\n", filepath.Join(s.ExperimentDir(id), "report.json"))
 	return ExitOK
 }
 
+func cmdInspect(args []string, stdout, stderr io.Writer) int {
+	root, rest, err := parseWorkdirOnly(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return ExitUsage
+	}
+	args = rest
+	if len(args) == 0 {
+		fmt.Fprintf(stderr, "error: usage: flakehunter inspect <test-name> [--experiment <id>] [--workdir <path>]\n")
+		return ExitUsage
+	}
+	s := store.New(root)
+	id := ""
+	var nameParts []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--experiment", "-e":
+			if i+1 >= len(args) {
+				fmt.Fprintf(stderr, "error: %s requires an id\n", args[i])
+				return ExitUsage
+			}
+			id = args[i+1]
+			i++
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				fmt.Fprintf(stderr, "error: unknown flag %q\n", args[i])
+				return ExitUsage
+			}
+			nameParts = append(nameParts, args[i])
+		}
+	}
+	query := strings.Join(nameParts, " ")
+	if query == "" {
+		fmt.Fprintf(stderr, "error: missing test name\n")
+		return ExitUsage
+	}
+
+	if id == "" {
+		id, err = s.LatestExperimentID()
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return ExitRuntime
+		}
+	}
+	exp, err := s.ReadExperiment(id)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: read experiment: %v\n", err)
+		return ExitRuntime
+	}
+	execs, err := s.LoadExecutions(id, exp.RunsRequested)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: load executions: %v\n", err)
+		return ExitRuntime
+	}
+	analysisRep, err := s.ReadAnalysis(id)
+	if err != nil {
+		// Recompute if missing.
+		analysisRep = analysis.AnalyzeExperiment(exp, execs, analysis.DefaultThresholds())
+	}
+	insp := report.InspectTest(id, analysisRep, execs, query)
+	report.WriteInspection(stdout, insp)
+
+	safe := sanitizeFileName(insp.TestName)
+	if err := s.WriteInspection(id, safe, insp); err != nil {
+		fmt.Fprintf(stderr, "warning: could not save inspection: %v\n", err)
+	} else {
+		fmt.Fprintf(stdout, "\nSaved inspection: %s\n",
+			filepath.Join(s.ExperimentDir(id), "inspections", safe+".json"))
+	}
+	return ExitOK
+}
+
+func sanitizeFileName(name string) string {
+	repl := strings.NewReplacer(`\`, "_", `/`, "_", `:`, "_", `*`, "_", `?`, "_", `"`, "_", `<`, "_", `>`, "_", `|`, "_", ` `, "_")
+	out := repl.Replace(name)
+	if len(out) > 120 {
+		out = out[:120]
+	}
+	if out == "" {
+		return "test"
+	}
+	return out
+}
+
 func cmdCompare(args []string, stdout, stderr io.Writer) int {
+	root, rest, err := parseWorkdirOnly(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return ExitUsage
+	}
+	args = rest
 	if len(args) < 2 {
-		fmt.Fprintf(stderr, "error: usage: flakehunter compare <left-id> <right-id>\n")
+		fmt.Fprintf(stderr, "error: usage: flakehunter compare <left-id> <right-id> [--workdir <path>]\n")
 		return ExitUsage
 	}
 	leftID, rightID := args[0], args[1]
@@ -243,7 +351,7 @@ func cmdCompare(args []string, stdout, stderr io.Writer) int {
 		return ExitUsage
 	}
 
-	s := store.New(".")
+	s := store.New(root)
 	leftExp, err := s.ReadExperiment(leftID)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: left experiment: %v\n", err)
@@ -292,7 +400,8 @@ Usage:
 
 Commands:
   run       Run a repeated test experiment (sequential or parallel)
-  report    Analyze an experiment and print a flakiness report
+  report    Analyze an experiment (terminal + analysis.json + report.json)
+  inspect   Deep-dive one test's history and evidence
   compare   Compare two experiments (e.g. sequential vs parallel)
   list      List saved experiments under .flakehunter/
   version   Print the FlakeHunter version
@@ -302,8 +411,9 @@ Examples:
   flakehunter run --runs 30 -- python -m pytest
   flakehunter run --runs 30 --parallel 4 -- python -m pytest
   flakehunter run --runs 20 --order random --seed 42 -- python -m pytest
-  flakehunter compare <seq-id> <par-id>
   flakehunter report
+  flakehunter inspect test_coin_flip
+  flakehunter compare <seq-id> <par-id>
   flakehunter list
 
 Notes:
@@ -311,6 +421,7 @@ Notes:
   - --order random needs pytest-randomly (--randomly-seed).
   - JUnit order is best-effort evidence, not guaranteed execution order.
   - Classifications and comparisons are evidence, not root-cause claims.
+  - Example flaky suite: testdata/flaky_suite (Phase 8).
 
 `)
 }
@@ -417,6 +528,23 @@ func parseRunArgs(args []string) (RunConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// parseWorkdirOnly extracts an optional --workdir flag from command args.
+func parseWorkdirOnly(args []string) (root string, rest []string, err error) {
+	root = "."
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--workdir" {
+			if i+1 >= len(args) {
+				return "", nil, fmt.Errorf("--workdir requires a path")
+			}
+			root = args[i+1]
+			i++
+			continue
+		}
+		rest = append(rest, args[i])
+	}
+	return root, rest, nil
 }
 
 func parseIntFlag(name string, args []string, i int) (int, error) {
